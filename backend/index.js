@@ -1,13 +1,15 @@
-const express = require('express');
-const cors = require('cors');
-const { OpenAI } = require('openai');
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
+require('dotenv').config();
+
+import express, { json } from 'express';
+import cors from 'cors';
+import { OpenAI } from 'openai';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(json());
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
