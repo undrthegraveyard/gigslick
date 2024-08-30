@@ -8,7 +8,12 @@ import path from 'path';
 import fs from 'fs';
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(json());
 
 const openai = new OpenAI({
@@ -16,24 +21,41 @@ const openai = new OpenAI({
 });
 
 // Set up multer for file uploads
-const upload = multer({
-  dest: 'uploads/',
-  fileFilter: (req, file, cb) => {
-    const allowedTypes = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
-    if (allowedTypes.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error('Invalid file type. Only PDF and Word documents are allowed.'));
-    }
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, 'uploads/')
   },
+  filename: function (req, file, cb) {
+    cb(null, Date.now() + path.extname(file.originalname))
+  }
+});
+
+const upload = multer({ 
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB file size limit
+  // fileFilter: (req, file, cb) => {
+  //   const allowedTypes = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+  //   if (allowedTypes.includes(file.mimetype)) {
+  //     cb(null, true);
+  //   } else {
+  //     cb(new Error('Invalid file type. Only PDF and Word documents are allowed.'));
+  //   }
+  // },
 });
 
 app.post('/api/upload-resume', upload.single('resume'), (req, res) => {
+
+  console.log("Received request for file upload");
+  console.log("Request headers:", req.headers);
+  console.log("Request body: -->", req.body)
+  console.log("Received file:", req.file);
+  
   if (!req.file) {
+    console.error("No file uploaded");
     return res.status(400).json({ error: 'No file uploaded' });
   }
-
-  // File uploaded successfully
+  
+  console.log("File uploaded successfully");
   res.json({ message: 'File uploaded successfully', filename: req.file.filename });
 });
 
@@ -95,7 +117,12 @@ app.post('/api/structure-job-description', async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 5000;
+app.use((error, req, res, next) => {
+  console.error("Server error:", error);
+  res.status(error.status || 500).json({ error: error.message });
+});
+
+const PORT = process.env.PORT || 5001;
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
