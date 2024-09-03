@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import axios from 'axios';
 
-const API_URL = 'http://localhost:5001'; // Update this to your actual backend URL
+const API_URL = 'http://localhost:5001';
 
 export default function ChatScreen() {
   const [messages, setMessages] = useState([
@@ -40,21 +40,29 @@ export default function ChatScreen() {
       const formData = new FormData();
       formData.append('resume', {
         uri: file.uri,
-        type: file.mimeType,
-        name: file.name,
+        type: file.mimeType || 'application/octet-stream',
+        name: file.name || 'resume.pdf',
       });
   
       console.log("FormData:", formData);
   
-      const response = await axios.post(`${API_URL}/api/upload-resume`,  formData, {
+      const response = await fetch(`${API_URL}/api/upload-resume`, {
+        method: 'POST',
+        body: formData,
         headers: {
-          'Content-Type': 'multipart/form-data',
           'Accept': 'application/json',
+          // Remove the Content-Type header, let the browser set it
         },
       });
   
-      console.log("Upload response:", response.data);
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
+      }
   
+      const result = await response.json();
+      console.log("Upload response:", result);
+
       const aiMessage = {
         id: (messages.length + 1).toString(),
         text: `Resume "${file.name}" uploaded successfully. Please describe your newest job to add to the resume.`,
@@ -66,11 +74,12 @@ export default function ChatScreen() {
           type: file.mimeType,
         },
       };
-  
+
       setMessages(prevMessages => [aiMessage, ...prevMessages]);
+
     } catch (err) {
       console.error("Upload error:", err);
-      setError(`Error: Unable to upload the file. ${err.response?.data?.error || err.message}`);
+      setError(`Error: Unable to upload the file. ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -78,38 +87,37 @@ export default function ChatScreen() {
 
   const sendMessage = async () => {
     if (inputText.trim()) {
-        const newMessage = {
-            id: (messages.length + 1).toString(),
-            text: inputText,
-            sender: 'Me',
+      const newMessage = {
+        id: (messages.length + 1).toString(),
+        text: inputText,
+        sender: 'Me',
+      };
+      setMessages(prevMessages => [newMessage, ...prevMessages]);
+      setInputText('');
+
+      setLoading(true);
+      setError('');
+      try {
+        const response = await axios.post(`${API_URL}/api/structure-job-description`, {
+          description: inputText,
+        });
+
+        console.log('Response received:', response.data);
+
+        const aiMessage = {
+          id: (messages.length + 2).toString(),
+          text: response.data.structuredText,
+          sender: 'AI',
         };
-        setMessages(prevMessages => [newMessage, ...prevMessages]);
-        setInputText('');
-
-        setLoading(true);
-        setError('');
-        try {
-            const response = await axios.post(`${API_URL}/api/structure-job-description`, {
-                description: inputText,
-            });
-
-            console.log('Response received:', response.data);
-
-            const aiMessage = {
-                id: (messages.length + 2).toString(),
-                text: response.data.structuredText,
-                sender: 'AI',
-            };
-            setMessages(prevMessages => [aiMessage, newMessage, ...prevMessages]);
-        } catch (err) {
-            console.error("Upload error:", err);
-            console.error("Error response:", err.response);
-            setError(`Error: Unable to upload the file. ${err.response?.data?.error || err.message}`);
-        } finally {
-            setLoading(false);
-        }
+        setMessages(prevMessages => [aiMessage, newMessage, ...prevMessages]);
+      } catch (err) {
+        console.error("Error:", err);
+        setError(`Error: Unable to process job description. ${err.response?.data?.error || err.message}`);
+      } finally {
+        setLoading(false);
+      }
     }
-}
+  }
 
   const renderMessage = ({ item }) => {
     if (item.type === 'file') {

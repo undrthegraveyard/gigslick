@@ -1,64 +1,108 @@
 import dotenv from 'dotenv';
 dotenv.config();
-import express, { json } from 'express';
+import express from 'express';
 import cors from 'cors';
 import { OpenAI } from 'openai';
-import multer from 'multer';
+import busboy from 'busboy';
 import path from 'path';
 import fs from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// Initialize Express app
 const app = express();
+
+// Configure CORS middleware
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-app.use(json());
+// Parse JSON request bodies
+app.use(express.json());
 
+// Initialize OpenAI client
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Set up multer for file uploads
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, 'uploads/')
-  },
-  filename: function (req, file, cb) {
-    cb(null, Date.now() + path.extname(file.originalname))
-  }
-});
+// Ensure uploads directory exists
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)){
+    fs.mkdirSync(uploadsDir);
+    console.log(`Created uploads directory: ${uploadsDir}`);
+}
 
-const upload = multer({ 
-  storage: storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB file size limit
-  fileFilter: (req, file, cb) => {
-    const allowedTypes = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
-    if (allowedTypes.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error('Invalid file type. Only PDF and Word documents are allowed.'));
-    }
-  },
-});
-
-app.post('/api/upload-resume', upload.single('resume'), (req, res) => {
-
+// Handle resume upload
+app.post('/api/upload-resume', (req, res) => {
   console.log("Received request for file upload");
   console.log("Request headers:", req.headers);
-  console.log("Request body: -->", req.body)
-  console.log("Received file:", req.file);
-  
-  if (!req.file) {
-    console.error("No file uploaded");
-    return res.status(400).json({ error: 'No file uploaded' });
-  }
-  
-  console.log("File uploaded successfully");
-  res.json({ message: 'File uploaded successfully', filename: req.file.filename });
+
+  const bb = busboy({ headers: req.headers });
+  let saveToPath = '';
+  let fileReceived = false;
+
+  bb.on('file', (name, file, info) => {
+    fileReceived = true;
+    const { filename, encoding, mimeType } = info;
+    console.log(`Processing file: [${name}]: filename: ${filename}, encoding: ${encoding}, mimeType: ${mimeType}`);
+    
+    const saveTo = path.join(uploadsDir, filename);
+    saveToPath = saveTo;
+    console.log(`Attempting to save file to: ${saveTo}`);
+
+    const writeStream = fs.createWriteStream(saveTo);
+    file.pipe(writeStream);
+
+    writeStream.on('finish', () => {
+      console.log(`File saved successfully to ${saveTo}`);
+    });
+
+    writeStream.on('error', (error) => {
+      console.error(`Error saving file: ${error}`);
+    });
+  });
+
+  bb.on('finish', () => {
+    console.log("Busboy finished processing the request");
+    if (fileReceived) {
+      if (saveToPath) {
+        console.log(`File should be saved at: ${saveToPath}`);
+        fs.access(saveToPath, fs.constants.F_OK, (err) => {
+          if (err) {
+            console.error(`File does not exist at ${saveToPath}`);
+            res.status(500).json({ error: 'File was not saved properly' });
+          } else {
+            console.log(`File exists at ${saveToPath}`);
+            res.json({ 
+              message: 'File uploaded successfully',
+              path: saveToPath
+            });
+          }
+        });
+      } else {
+        console.error('File was processed but not saved');
+        res.status(500).json({ error: 'File was processed but not saved' });
+      }
+    } else {
+      console.error('No file was processed');
+      res.status(400).json({ error: 'No file was processed' });
+    }
+  });
+
+  bb.on('error', (error) => {
+    console.error("Busboy error:", error);
+    res.status(500).json({ error: 'File upload failed' });
+  });
+
+  req.pipe(bb);
 });
 
+// Handle job description structuring
 app.post('/api/structure-job-description', async (req, res) => {
   const { description } = req.body;
   if (!description) {
@@ -67,6 +111,7 @@ app.post('/api/structure-job-description', async (req, res) => {
   try {
     console.log('Received job description:', description);
 
+    // Construct prompt for OpenAI
     const prompt = `
       Convert the following unstructured job description into a professional, well-articulated
       resume section.
@@ -90,6 +135,7 @@ app.post('/api/structure-job-description', async (req, res) => {
 
     console.log('Sending prompt to OpenAI:', prompt);
 
+    // Make API request to OpenAI
     const response = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
       messages: [{ role: "user", content: prompt }],
@@ -100,7 +146,7 @@ app.post('/api/structure-job-description', async (req, res) => {
     console.log('Received response from OpenAI:', response.choices[0].message.content);
 
     let structuredText = response.choices[0].message.content.trim();
-    // Post-processing
+    // Post-processing of the structured text
     structuredText = structuredText.replace(/•/g, '- '); // Replace bullet points with dashes
     structuredText = structuredText.replace(/(\d{4}) - (\d{4})/g, '$1-$2'); // Ensure consistent date formatting
     // Ensure each bullet point starts with a capital letter and ends with a period
@@ -117,11 +163,13 @@ app.post('/api/structure-job-description', async (req, res) => {
   }
 });
 
+// Global error handler
 app.use((error, req, res, next) => {
   console.error("Server error:", error);
   res.status(error.status || 500).json({ error: error.message });
 });
 
+// Start the server
 const PORT = process.env.PORT || 5001;
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
