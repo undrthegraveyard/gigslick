@@ -3,6 +3,7 @@ import { View, Text, TextInput, FlatList, TouchableOpacity, StyleSheet, Activity
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import axios from 'axios';
+import * as FileSystem from 'expo-file-system';
 
 const API_URL = 'http://localhost:5001';
 
@@ -38,11 +39,19 @@ export default function ChatScreen() {
       console.log("Uploading file:", file);
       
       const formData = new FormData();
-      formData.append('resume', {
-        uri: file.uri,
-        type: file.mimeType || 'application/octet-stream',
-        name: file.name || 'resume.pdf',
-      });
+      
+      if (Platform.OS === 'web') {
+        const response = await fetch(file.uri);
+        const blob = await response.blob();
+        formData.append('resume', blob, file.name);
+      } else {
+        const fileInfo = await FileSystem.getInfoAsync(file.uri);
+        formData.append('resume', {
+          uri: fileInfo.uri,
+          type: file.mimeType || 'application/octet-stream',
+          name: file.name || 'resume.pdf',
+        });
+      }
   
       console.log("FormData:", formData);
   
@@ -51,10 +60,11 @@ export default function ChatScreen() {
         body: formData,
         headers: {
           'Accept': 'application/json',
-          // Remove the Content-Type header, let the browser set it
         },
       });
   
+      console.log("Response status:", response.status);
+      
       if (!response.ok) {
         const errorText = await response.text();
         throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
@@ -62,7 +72,7 @@ export default function ChatScreen() {
   
       const result = await response.json();
       console.log("Upload response:", result);
-
+  
       const aiMessage = {
         id: (messages.length + 1).toString(),
         text: `Resume "${file.name}" uploaded successfully. Please describe your newest job to add to the resume.`,
@@ -74,9 +84,9 @@ export default function ChatScreen() {
           type: file.mimeType,
         },
       };
-
+  
       setMessages(prevMessages => [aiMessage, ...prevMessages]);
-
+  
     } catch (err) {
       console.error("Upload error:", err);
       setError(`Error: Unable to upload the file. ${err.message}`);
